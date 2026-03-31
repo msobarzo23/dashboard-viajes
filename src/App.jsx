@@ -7,7 +7,7 @@ import {
 } from "recharts";
 
 // ── CONFIG ──────────────────────────────────────────────────────────────────
-const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRfKblo0PEPiyzfOniTQzk0HEf7fBeH1yC0SFBfKO0sMnGhPPEWI0T7fRtPA9rcXx8VPsptR3T835xa/pub?gid=0&single=true&output=csv"; // Reemplazar con la URL del CSV publicado
+const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRfKblo0PEPiyzfOniTQzk0HEf7fBeH1yC0SFBfKO0sMnGhPPEWI0T7fRtPA9rcXx8VPsptR3T835xa/pub?gid=0&single=true&output=csv";
 
 // ── COLORS ──────────────────────────────────────────────────────────────────
 const BLUE = {
