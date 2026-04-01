@@ -72,7 +72,10 @@ function getMonthLabel(key) {
 function getWeekKey(d) {
   if (!d) return null;
   const start = new Date(d);
-  start.setDate(start.getDate() - start.getDay() + 1);
+  const day = start.getDay();
+  const diffToMonday = day === 0 ? -6 : 1 - day;
+  start.setDate(start.getDate() + diffToMonday);
+  start.setHours(0, 0, 0, 0);
   return `${start.getFullYear()}-${String(start.getMonth()+1).padStart(2,"0")}-${String(start.getDate()).padStart(2,"0")}`;
 }
 
@@ -89,6 +92,46 @@ function topN(obj, n = 10) {
 function pctChange(curr, prev) {
   if (!prev || prev === 0) return null;
   return ((curr - prev) / prev * 100);
+}
+
+function filterData(records, { year = null, month = null, client = "todos", equipo = "todos" } = {}) {
+  return records.filter((r) => {
+    if (year !== null && r._year !== year) return false;
+    if (month !== null && r._month !== month) return false;
+    if (client !== "todos" && r.cliente !== client) return false;
+    if (equipo !== "todos" && r.tipoequipo !== equipo) return false;
+    return true;
+  });
+}
+
+function buildMonthlyTrend(records) {
+  const months = {};
+  records.forEach((r) => {
+    const monthKey = r._monthKey;
+    if (!monthKey) return;
+    if (!months[monthKey]) {
+      months[monthKey] = { month: monthKey, label: getMonthLabel(monthKey), viajes: 0, solicitudes: new Set() };
+    }
+    months[monthKey].viajes += 1;
+    months[monthKey].solicitudes.add(r.solicitud);
+  });
+
+  return Object.values(months)
+    .sort((a, b) => a.month.localeCompare(b.month))
+    .map((month) => ({ ...month, solicitudes: month.solicitudes.size }));
+}
+
+function buildYoyData(records, years) {
+  if (years.length < 2) return [];
+  const byMonth = {};
+
+  records.forEach((r) => {
+    if (!r._year || !r._month) return;
+    if (!byMonth[r._month]) byMonth[r._month] = { mes: MONTH_NAMES[r._month - 1] };
+    byMonth[r._month][`y${r._year}`] = (byMonth[r._month][`y${r._year}`] || 0) + 1;
+  });
+
+  return Object.values(byMonth).sort((a, b) => MONTH_NAMES.indexOf(a.mes) - MONTH_NAMES.indexOf(b.mes));
 }
 
 // ── STYLES ──────────────────────────────────────────────────────────────────
@@ -172,6 +215,8 @@ export default function App() {
   const [selectedClient, setSelectedClient] = useState("todos");
   const [selectedEquipo, setSelectedEquipo] = useState("todos");
   const [compareMode, setCompareMode] = useState(false);
+  const selectedYearNumber = selectedYear === "todos" ? null : parseInt(selectedYear, 10);
+  const selectedMonthNumber = selectedMonth === "todos" ? null : parseInt(selectedMonth, 10);
 
   useEffect(() => {
     const link = document.createElement("link");
@@ -181,6 +226,7 @@ export default function App() {
     const st = document.createElement("style");
     st.textContent = `@keyframes spin { to { transform: rotate(360deg); } }`;
     document.head.appendChild(st);
+    let isMounted = true;
 
     Papa.parse(CSV_URL, {
       download: true, header: true, skipEmptyLines: true,
@@ -189,29 +235,50 @@ export default function App() {
           const d = parseDate(r.fechainicio);
           return { ...r, _date: d, _year: d ? d.getFullYear() : null, _month: d ? d.getMonth() + 1 : null, _monthKey: getMonthKey(d), _weekKey: getWeekKey(d), _dayOfWeek: d ? d.getDay() : null, cliente: (r.Cliente || r.cliente || "").trim().toUpperCase(), tipoequipo: (r.tipoequipo || "").trim().toUpperCase(), tipocarga: (r.tipocarga || "").trim().toUpperCase(), tipoviaje: (r.tipoviaje || "").trim().toUpperCase(), origen: (r.origen || "").trim().toUpperCase(), destino: (r.destino || "").trim().toUpperCase(), creadopor: (r.creadopor || "").trim() };
         }).filter(r => r._date);
+        if (!isMounted) return;
         setRawData(cleaned);
         setLoading(false);
       },
-      error: (err) => { setError(err.message); setLoading(false); },
+      error: (err) => {
+        if (!isMounted) return;
+        setError(err.message);
+        setLoading(false);
+      },
     });
+
+    return () => {
+      isMounted = false;
+      if (document.head.contains(link)) document.head.removeChild(link);
+      if (document.head.contains(st)) document.head.removeChild(st);
+    };
   }, []);
+
+  useEffect(() => {
+    if (selectedYearNumber === null && compareMode) setCompareMode(false);
+  }, [selectedYearNumber, compareMode]);
 
   const years = useMemo(() => [...new Set(rawData.map(r => r._year).filter(Boolean))].sort(), [rawData]);
   const clients = useMemo(() => [...new Set(rawData.map(r => r.cliente).filter(Boolean))].sort(), [rawData]);
   const equipos = useMemo(() => [...new Set(rawData.map(r => r.tipoequipo).filter(Boolean))].sort(), [rawData]);
-  const filteredData = useMemo(() => rawData.filter(r => {
-    if (selectedYear !== "todos" && r._year !== parseInt(selectedYear)) return false;
-    if (selectedMonth !== "todos" && r._month !== parseInt(selectedMonth)) return false;
-    if (selectedClient !== "todos" && r.cliente !== selectedClient) return false;
-    if (selectedEquipo !== "todos" && r.tipoequipo !== selectedEquipo) return false;
-    return true;
-  }), [rawData, selectedYear, selectedMonth, selectedClient, selectedEquipo]);
+  const historicalData = useMemo(() => filterData(rawData, {
+    client: selectedClient,
+    equipo: selectedEquipo,
+  }), [rawData, selectedClient, selectedEquipo]);
+  const filteredData = useMemo(() => filterData(historicalData, {
+    year: selectedYearNumber,
+    month: selectedMonthNumber,
+    client: "todos",
+    equipo: "todos",
+  }), [historicalData, selectedYearNumber, selectedMonthNumber]);
   const prevPeriodData = useMemo(() => {
-    if (!compareMode) return [];
-    if (selectedMonth !== "todos" && selectedYear !== "todos") return rawData.filter(r => r._year === parseInt(selectedYear) - 1 && r._month === parseInt(selectedMonth));
-    if (selectedYear !== "todos") return rawData.filter(r => r._year === parseInt(selectedYear) - 1);
-    return [];
-  }, [rawData, compareMode, selectedYear, selectedMonth]);
+    if (!compareMode || selectedYearNumber === null) return [];
+    return filterData(historicalData, {
+      year: selectedYearNumber - 1,
+      month: selectedMonthNumber,
+      client: "todos",
+      equipo: "todos",
+    });
+  }, [compareMode, historicalData, selectedYearNumber, selectedMonthNumber]);
 
   const metrics = useMemo(() => {
     const total = filteredData.length;
@@ -227,18 +294,9 @@ export default function App() {
     return { total, solicitudes, clientCount, avgPerMonth, byMonth, monthKeys, prevTotal, prevSolicitudes, prevClients, byTipoViaje };
   }, [filteredData, prevPeriodData]);
 
-  const monthlyTrend = useMemo(() => {
-    const m = {};
-    rawData.forEach(r => { const mk = r._monthKey; if (mk) { if (!m[mk]) m[mk] = { month: mk, label: getMonthLabel(mk), viajes: 0, solicitudes: new Set() }; m[mk].viajes++; m[mk].solicitudes.add(r.solicitud); } });
-    return Object.values(m).sort((a, b) => a.month.localeCompare(b.month)).map(x => ({ ...x, solicitudes: x.solicitudes.size }));
-  }, [rawData]);
-
-  const yoyData = useMemo(() => {
-    if (years.length < 2) return [];
-    const bym = {};
-    rawData.forEach(r => { if (!r._year || !r._month) return; if (!bym[r._month]) bym[r._month] = { mes: MONTH_NAMES[r._month - 1] }; bym[r._month][`y${r._year}`] = (bym[r._month][`y${r._year}`] || 0) + 1; });
-    return Object.values(bym).sort((a, b) => MONTH_NAMES.indexOf(a.mes) - MONTH_NAMES.indexOf(b.mes));
-  }, [rawData, years]);
+  const historicalYears = useMemo(() => [...new Set(historicalData.map(r => r._year).filter(Boolean))].sort(), [historicalData]);
+  const monthlyTrend = useMemo(() => buildMonthlyTrend(historicalData), [historicalData]);
+  const yoyData = useMemo(() => buildYoyData(historicalData, historicalYears), [historicalData, historicalYears]);
 
   if (loading) return <div style={S.loading}><div style={S.spinner} /><div style={{ fontSize: "16px", fontWeight: "500", color: GRAY[500] }}>Cargando datos de viajes...</div></div>;
   if (error) return <div style={S.loading}><div style={{ fontSize: "48px" }}>⚠️</div><div style={{ fontSize: "16px", color: "#ef4444" }}>Error: {error}</div></div>;
@@ -258,17 +316,17 @@ export default function App() {
           <div><div style={S.fLabel}>Mes</div><select style={S.sel} value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)}><option value="todos">Todos</option>{MONTH_NAMES.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}</select></div>
           <div><div style={S.fLabel}>Cliente</div><select style={S.sel} value={selectedClient} onChange={e => setSelectedClient(e.target.value)}><option value="todos">Todos ({clients.length})</option>{clients.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
           <div><div style={S.fLabel}>Tipo Equipo</div><select style={S.sel} value={selectedEquipo} onChange={e => setSelectedEquipo(e.target.value)}><option value="todos">Todos ({equipos.length})</option>{equipos.map(e => <option key={e} value={e}>{e}</option>)}</select></div>
-          <div style={{ marginLeft: "auto" }}><div style={S.fLabel}>Comparar</div><button style={S.cmpBtn(compareMode)} onClick={() => setCompareMode(!compareMode)}>{compareMode ? "✓ Comparando" : "vs Año anterior"}</button></div>
+          <div style={{ marginLeft: "auto" }}><div style={S.fLabel}>Comparar</div><button style={{ ...S.cmpBtn(compareMode), opacity: selectedYearNumber === null ? 0.55 : 1, cursor: selectedYearNumber === null ? "not-allowed" : "pointer" }} onClick={() => selectedYearNumber !== null && setCompareMode(!compareMode)} disabled={selectedYearNumber === null}>{compareMode ? "✓ Comparando" : "vs Año anterior"}</button></div>
         </div>
-        {activeTab === "resumen" && <TabResumen data={filteredData} metrics={metrics} monthlyTrend={monthlyTrend} yoyData={yoyData} years={years} compareMode={compareMode} />}
+        {activeTab === "resumen" && <TabResumen data={filteredData} metrics={metrics} monthlyTrend={monthlyTrend} yoyData={yoyData} years={historicalYears} compareMode={compareMode} />}
         {activeTab === "clientes" && <TabClientes data={filteredData} metrics={metrics} compareMode={compareMode} prevData={prevPeriodData} />}
         {activeTab === "equipos" && <TabEquipos data={filteredData} />}
         {activeTab === "rutas" && <TabRutas data={filteredData} />}
         {activeTab === "operadores" && <TabOperadores data={filteredData} />}
-        {activeTab === "tendencias" && <TabTendencias data={filteredData} rawData={rawData} monthlyTrend={monthlyTrend} yoyData={yoyData} years={years} />}
+        {activeTab === "tendencias" && <TabTendencias data={historicalData} rawData={historicalData} monthlyTrend={monthlyTrend} yoyData={yoyData} years={historicalYears} />}
         {activeTab === "cruces" && <TabCruces data={filteredData} />}
-        {activeTab === "riesgo" && <TabRiesgo data={filteredData} rawData={rawData} />}
-        {activeTab === "proyeccion" && <TabProyeccion rawData={rawData} monthlyTrend={monthlyTrend} />}
+        {activeTab === "riesgo" && <TabRiesgo data={filteredData} rawData={historicalData} />}
+        {activeTab === "proyeccion" && <TabProyeccion rawData={historicalData} monthlyTrend={monthlyTrend} />}
       </div>
     </div>
   );
